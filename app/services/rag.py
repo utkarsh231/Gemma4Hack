@@ -33,12 +33,13 @@ class PineconeRagService:
     def __init__(self, *, settings: Settings) -> None:
         self.settings = settings
 
-    def index_source(self, *, session_id: str, source: ExtractedPdf) -> None:
+    def index_source(self, *, namespace: str, source: ExtractedPdf, material_id: str | None = None) -> None:
         index = self._index()
         chunks = chunk_extracted_pdf(
             source,
             chunk_chars=self.settings.rag_chunk_chars,
             overlap_chars=self.settings.rag_chunk_overlap_chars,
+            id_prefix=material_id or namespace,
         )
         records = [
             {
@@ -48,20 +49,21 @@ class PineconeRagService:
                 "page": chunk.page,
                 "chunk_index": chunk.chunk_index,
                 "filename": source.filename,
+                "material_id": material_id or namespace,
             }
             for chunk in chunks
         ]
 
         try:
-            index.upsert_records(namespace=session_id, records=records)
+            index.upsert_records(namespace=namespace, records=records)
         except Exception as exc:
             raise RagError("Could not index document chunks in Pinecone.") from exc
 
-    def retrieve(self, *, session_id: str, question: str) -> list[RetrievedChunk]:
+    def retrieve(self, *, namespace: str, question: str) -> list[RetrievedChunk]:
         index = self._index()
         try:
             results = index.search(
-                namespace=session_id,
+                namespace=namespace,
                 query={"inputs": {"text": question}, "top_k": self.settings.rag_top_k},
                 fields=[self.text_field, self.fallback_text_field, "page"],
             )
@@ -106,7 +108,13 @@ class PineconeRagService:
             raise RagError("Could not connect to the Pinecone index.") from exc
 
 
-def chunk_extracted_pdf(source: ExtractedPdf, *, chunk_chars: int, overlap_chars: int) -> list[DocumentChunk]:
+def chunk_extracted_pdf(
+    source: ExtractedPdf,
+    *,
+    chunk_chars: int,
+    overlap_chars: int,
+    id_prefix: str | None = None,
+) -> list[DocumentChunk]:
     if overlap_chars >= chunk_chars:
         overlap_chars = max(0, chunk_chars // 5)
 
@@ -119,7 +127,7 @@ def chunk_extracted_pdf(source: ExtractedPdf, *, chunk_chars: int, overlap_chars
             if chunk_text:
                 chunks.append(
                     DocumentChunk(
-                        id=f"{source.filename}-p{page}-c{len(chunks)}",
+                        id=f"{id_prefix or source.filename}:{len(chunks):05d}",
                         text=chunk_text,
                         page=page,
                         chunk_index=len(chunks),

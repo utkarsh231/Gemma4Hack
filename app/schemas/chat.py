@@ -27,6 +27,8 @@ class ChatSessionResponse(BaseModel):
 
 class ChatMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
+    material_id: str | None = Field(default=None, max_length=100)
+    notes_markdown: str | None = Field(default=None, max_length=200_000)
 
 
 class ChatMessageResponse(BaseModel):
@@ -38,6 +40,8 @@ class LinkSessionRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
     learner_goal: str | None = Field(default=None, max_length=500)
     detail_level: DetailLevel = DetailLevel.standard
+    session_id: str | None = Field(default=None, max_length=100)
+    material_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("url")
     @classmethod
@@ -55,6 +59,8 @@ class YouTubeSessionRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
     learner_goal: str | None = Field(default=None, max_length=500)
     detail_level: DetailLevel = DetailLevel.standard
+    session_id: str | None = Field(default=None, max_length=100)
+    material_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("url")
     @classmethod

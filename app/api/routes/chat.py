@@ -10,6 +10,7 @@ from app.schemas.chat import ChatMessageRequest, ChatMessageResponse, ChatRole, 
 from app.schemas.notes import DetailLevel
 from app.services.chat_store import ChatSession, chat_store
 from app.services.gemma_notes import GemmaNotesService, NotesGenerationError
+from app.services.pdf_text import ExtractedPdf
 from app.services.pdf_text import PdfExtractionError, extract_pdf_text
 from app.services.rag import (
     PineconeRagService,
@@ -37,6 +38,8 @@ async def create_chat_session_from_pdf(
     file: Annotated[UploadFile, File(description="PDF study material to transform into a chat session.")],
     learner_goal: Annotated[str | None, Form(max_length=500)] = None,
     detail_level: Annotated[DetailLevel, Form()] = DetailLevel.standard,
+    session_id: Annotated[str | None, Form(max_length=100)] = None,
+    material_id: Annotated[str | None, Form(max_length=100)] = None,
     settings: Annotated[Settings, Depends(get_settings)] = None,
     notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)] = None,
     rag_service: Annotated[PineconeRagService, Depends(get_rag_service)] = None,
@@ -54,9 +57,14 @@ async def create_chat_session_from_pdf(
         logger.exception("chat_session_notes_generation_failed")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    session = chat_store.create_session(source=extracted, initial_notes_markdown=notes.notes_markdown)
+    session = chat_store.create_session(
+        source=extracted,
+        initial_notes_markdown=notes.notes_markdown,
+        session_id=session_id,
+        material_id=material_id,
+    )
     try:
-        await anyio.to_thread.run_sync(partial(rag_service.index_source, session_id=session.id, source=extracted))
+        await anyio.to_thread.run_sync(partial(_index_source, rag_service=rag_service, session=session, source=extracted))
     except RagError as exc:
         chat_store.delete_session(session.id)
         logger.exception("chat_session_rag_indexing_failed")
@@ -83,9 +91,14 @@ async def create_chat_session_from_youtube(
         logger.exception("chat_session_youtube_notes_generation_failed")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    session = chat_store.create_session(source=source, initial_notes_markdown=notes.notes_markdown)
+    session = chat_store.create_session(
+        source=source,
+        initial_notes_markdown=notes.notes_markdown,
+        session_id=payload.session_id,
+        material_id=payload.material_id,
+    )
     try:
-        await anyio.to_thread.run_sync(partial(rag_service.index_source, session_id=session.id, source=source))
+        await anyio.to_thread.run_sync(partial(_index_source, rag_service=rag_service, session=session, source=source))
     except RagError as exc:
         chat_store.delete_session(session.id)
         logger.exception("chat_session_youtube_rag_indexing_failed")
@@ -112,9 +125,14 @@ async def create_chat_session_from_link(
         logger.exception("chat_session_link_notes_generation_failed")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    session = chat_store.create_session(source=source, initial_notes_markdown=notes.notes_markdown)
+    session = chat_store.create_session(
+        source=source,
+        initial_notes_markdown=notes.notes_markdown,
+        session_id=payload.session_id,
+        material_id=payload.material_id,
+    )
     try:
-        await anyio.to_thread.run_sync(partial(rag_service.index_source, session_id=session.id, source=source))
+        await anyio.to_thread.run_sync(partial(_index_source, rag_service=rag_service, session=session, source=source))
     except RagError as exc:
         chat_store.delete_session(session.id)
         logger.exception("chat_session_link_rag_indexing_failed")
@@ -132,7 +150,15 @@ async def create_chat_message(
 ) -> ChatMessageResponse:
     session = chat_store.get_session(session_id)
     if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+        if not payload.material_id or not payload.notes_markdown:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+        return await _answer_restored_session(
+            session_id=session_id,
+            payload=payload,
+            settings=settings,
+            notes_service=notes_service,
+            rag_service=rag_service,
+        )
 
     user_message = chat_store.append_message(
         session_id=session_id,
@@ -152,7 +178,7 @@ async def create_chat_message(
         )
         semantic_chunks = await _retrieve_semantic_chunks(
             rag_service=rag_service,
-            session_id=session_id,
+            namespace=session.rag_namespace,
             question=payload.message,
             timeout_seconds=settings.rag_semantic_timeout_seconds,
         )
@@ -236,14 +262,14 @@ def _conversation_markdown(session: ChatSession) -> str:
 async def _retrieve_semantic_chunks(
     *,
     rag_service: PineconeRagService,
-    session_id: str,
+    namespace: str,
     question: str,
     timeout_seconds: float,
 ):
     with anyio.move_on_after(timeout_seconds) as cancel_scope:
         try:
             return await anyio.to_thread.run_sync(
-                partial(rag_service.retrieve, session_id=session_id, question=question),
+                partial(_retrieve_from_rag, rag_service=rag_service, namespace=namespace, question=question),
                 abandon_on_cancel=True,
             )
         except RagError:
@@ -253,3 +279,58 @@ async def _retrieve_semantic_chunks(
     if cancel_scope.cancel_called:
         logger.warning("chat_message_semantic_retrieval_timed_out")
     return []
+
+
+def _index_source(*, rag_service: PineconeRagService, session: ChatSession, source) -> None:
+    try:
+        rag_service.index_source(namespace=session.rag_namespace, source=source, material_id=session.material_id)
+    except TypeError:
+        rag_service.index_source(session_id=session.id, source=source)
+
+
+def _retrieve_from_rag(*, rag_service: PineconeRagService, namespace: str, question: str):
+    try:
+        return rag_service.retrieve(namespace=namespace, question=question)
+    except TypeError:
+        return rag_service.retrieve(session_id=namespace, question=question)
+
+
+async def _answer_restored_session(
+    *,
+    session_id: str,
+    payload: ChatMessageRequest,
+    settings: Settings,
+    notes_service: GemmaNotesService,
+    rag_service: PineconeRagService,
+) -> ChatMessageResponse:
+    try:
+        semantic_chunks = await _retrieve_semantic_chunks(
+            rag_service=rag_service,
+            namespace=payload.material_id or session_id,
+            question=payload.message,
+            timeout_seconds=settings.rag_semantic_timeout_seconds,
+        )
+        retrieved_context = format_retrieved_context(semantic_chunks)
+        source = ExtractedPdf(
+            filename=payload.material_id or "restored-material",
+            text=retrieved_context,
+            page_count=1,
+            extracted_characters=max(1, len(retrieved_context)),
+            truncated=False,
+        )
+        answer = await anyio.to_thread.run_sync(
+            partial(
+                notes_service.answer_question,
+                source=source,
+                notes_markdown=payload.notes_markdown or "",
+                conversation_markdown="",
+                retrieved_context=retrieved_context,
+                question=payload.message,
+            )
+        )
+    except NotesGenerationError as exc:
+        logger.exception("restored_chat_message_generation_failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    message = chat_store._build_message(role=ChatRole.assistant, content_markdown=answer)
+    return ChatMessageResponse(session_id=session_id, message=message)

@@ -11,6 +11,8 @@ from app.services.pdf_text import ExtractedPdf
 @dataclass
 class ChatSession:
     id: str
+    rag_namespace: str
+    material_id: str | None
     source: ExtractedPdf
     source_stats: SourceStats
     messages: list[ChatMessage] = field(default_factory=list)
@@ -21,8 +23,15 @@ class InMemoryChatStore:
         self._sessions: dict[str, ChatSession] = {}
         self._lock = Lock()
 
-    def create_session(self, *, source: ExtractedPdf, initial_notes_markdown: str) -> ChatSession:
-        session_id = str(uuid4())
+    def create_session(
+        self,
+        *,
+        source: ExtractedPdf,
+        initial_notes_markdown: str,
+        session_id: str | None = None,
+        material_id: str | None = None,
+    ) -> ChatSession:
+        session_id = session_id or str(uuid4())
         source_stats = SourceStats(
             filename=source.filename,
             page_count=source.page_count,
@@ -32,6 +41,8 @@ class InMemoryChatStore:
         initial_message = self._build_message(role=ChatRole.assistant, content_markdown=initial_notes_markdown)
         session = ChatSession(
             id=session_id,
+            rag_namespace=material_id or session_id,
+            material_id=material_id,
             source=source,
             source_stats=source_stats,
             messages=[initial_message],
