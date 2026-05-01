@@ -24,6 +24,25 @@ class FakeNotesService:
             source=extracted_pdf,
         )
 
+    def generate_notes_from_youtube(
+        self,
+        *,
+        youtube_url: str,
+        learner_goal: str | None,
+        detail_level: DetailLevel,
+    ):
+        source = ExtractedPdf(
+            filename=youtube_url,
+            text="### **Video Notes**\n\n[00:00] This video explains attention and learning.",
+            page_count=1,
+            extracted_characters=71,
+            truncated=False,
+        )
+        return build_notes_response(
+            notes_markdown=source.text,
+            source=source,
+        ), source
+
     def answer_question(
         self,
         *,
@@ -89,3 +108,22 @@ def test_create_chat_session_and_ask_question() -> None:
     assert message["role"] == "assistant"
     assert "What should I remember first?" in message["content_markdown"]
     assert "Attention improves with small study blocks." in message["content_markdown"]
+
+
+def test_create_chat_session_from_youtube() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/v1/chat/sessions/from-youtube",
+        json={
+            "url": "https://www.youtube.com/watch?v=abc123",
+            "learner_goal": "Study",
+            "detail_level": "standard",
+        },
+    )
+
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["session_id"]
+    assert created["source_stats"]["filename"] == "https://www.youtube.com/watch?v=abc123"
+    assert "Video Notes" in created["messages"][0]["content_markdown"]

@@ -1,7 +1,13 @@
 import pytest
 
 from app.schemas.notes import DetailLevel, NotesResponse
-from app.services.gemma_notes import NotesGenerationError, build_chat_prompt, build_notes_prompt, build_notes_response
+from app.services.gemma_notes import (
+    NotesGenerationError,
+    build_chat_prompt,
+    build_notes_prompt,
+    build_notes_response,
+    build_youtube_notes_prompt,
+)
 from app.services.pdf_text import ExtractedPdf
 
 
@@ -37,6 +43,22 @@ def test_build_notes_prompt_requests_markdown(source: ExtractedPdf) -> None:
     assert "Return only the final notes in Markdown" in prompt
     assert "Quick Self-Check Questions" in prompt
     assert "Attention Breakpoints" in prompt
+
+
+def test_build_youtube_notes_prompt_requests_timestamped_notes() -> None:
+    source = ExtractedPdf(
+        filename="https://www.youtube.com/watch?v=abc123",
+        text="[00:00] Intro\n[01:23] Main idea",
+        page_count=1,
+        extracted_characters=28,
+        truncated=False,
+    )
+    prompt = build_youtube_notes_prompt(source=source, learner_goal="Study", detail_level=DetailLevel.standard)
+
+    assert "Create ADHD-friendly study notes from this YouTube transcript" in prompt
+    assert "Timestamped focus blocks" in prompt
+    assert "Use timestamps whenever possible" in prompt
+    assert "[01:23] Main idea" in prompt
 
 
 def test_build_chat_prompt_uses_retrieved_context_instead_of_full_source(source: ExtractedPdf) -> None:

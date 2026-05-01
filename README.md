@@ -78,6 +78,18 @@ curl -X POST "http://127.0.0.1:8000/api/v1/chat/sessions/from-pdf" \
   -F "detail_level=standard"
 ```
 
+Create a chat session from a public YouTube video:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/chat/sessions/from-youtube" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+    "learner_goal": "Prepare for tomorrow'\''s quiz",
+    "detail_level": "standard"
+  }'
+```
+
 Ask a follow-up question:
 
 ```bash
