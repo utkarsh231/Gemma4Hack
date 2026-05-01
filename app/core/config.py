@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     gemma_model: str = Field(default="gemma-4-26b-a4b-it", alias="GEMMA_MODEL")
+    supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
+    supabase_anon_key: str | None = Field(default=None, alias="SUPABASE_ANON_KEY")
     pinecone_api_key: str | None = Field(default=None, alias="PINECONE_API_KEY")
     pinecone_index_name: str = Field(default="gemma4hack-study-chunks", alias="PINECONE_INDEX_NAME")
     pinecone_cloud: str = Field(default="aws", alias="PINECONE_CLOUD")
