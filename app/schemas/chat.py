@@ -34,6 +34,23 @@ class ChatMessageResponse(BaseModel):
     message: ChatMessage
 
 
+class LinkSessionRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+    learner_goal: str | None = Field(default=None, max_length=500)
+    detail_level: DetailLevel = DetailLevel.standard
+
+    @field_validator("url")
+    @classmethod
+    def validate_link_url(cls, value: str) -> str:
+        stripped = value.strip()
+        parsed = urlparse(stripped)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Link URL must start with http:// or https://.")
+        if parsed.netloc.lower() in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}:
+            raise ValueError("Use the YouTube source type for YouTube URLs.")
+        return stripped
+
+
 class YouTubeSessionRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
     learner_goal: str | None = Field(default=None, max_length=500)

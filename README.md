@@ -90,6 +90,18 @@ curl -X POST "http://127.0.0.1:8000/api/v1/chat/sessions/from-youtube" \
   }'
 ```
 
+Create a chat session from an online article:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/chat/sessions/from-link" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/article",
+    "learner_goal": "Prepare for tomorrow'\''s quiz",
+    "detail_level": "standard"
+  }'
+```
+
 Ask a follow-up question:
 
 ```bash

@@ -2,6 +2,7 @@ from google import genai
 
 from app.core.config import Settings
 from app.schemas.notes import DetailLevel, NotesResponse, SourceStats
+from app.services.article_text import extract_article_text
 from app.services.pdf_text import ExtractedPdf
 from app.services.youtube_text import extract_youtube_transcript
 
@@ -43,6 +44,46 @@ class GemmaNotesService:
             raise NotesGenerationError("Gemma returned an empty response.")
 
         return build_notes_response(notes_markdown=text, source=extracted_pdf)
+
+    def generate_notes_from_article(
+        self,
+        *,
+        url: str,
+        learner_goal: str | None,
+        detail_level: DetailLevel,
+    ) -> tuple[NotesResponse, ExtractedPdf]:
+        if not self.settings.gemini_api_key:
+            raise NotesGenerationError("GEMINI_API_KEY is not configured.")
+
+        client = genai.Client(api_key=self.settings.gemini_api_key)
+        article = extract_article_text(url, max_chars=self.settings.max_extracted_chars)
+        source = ExtractedPdf(
+            filename=article.url,
+            text=f"{article.title}\n\n{article.text}",
+            page_count=1,
+            extracted_characters=article.extracted_characters,
+            truncated=article.truncated,
+        )
+        prompt = build_article_notes_prompt(
+            source=source,
+            title=article.title,
+            learner_goal=learner_goal,
+            detail_level=detail_level,
+        )
+
+        try:
+            response = client.models.generate_content(
+                model=self.settings.gemma_model,
+                contents=prompt,
+            )
+        except Exception as exc:
+            raise NotesGenerationError(f"Gemma article request failed with model {self.settings.gemma_model}: {exc}") from exc
+
+        text = getattr(response, "text", None)
+        if not text:
+            raise NotesGenerationError("Gemma returned an empty response.")
+
+        return build_notes_response(notes_markdown=text, source=source), source
 
     def generate_notes_from_youtube(
         self,
@@ -241,6 +282,55 @@ PDF metadata:
 
 PDF text:
 {extracted_pdf.text}
+""".strip()
+
+
+def build_article_notes_prompt(
+    *,
+    source: ExtractedPdf,
+    title: str,
+    learner_goal: str | None,
+    detail_level: DetailLevel,
+) -> str:
+    goal = learner_goal.strip() if learner_goal and learner_goal.strip() else "Help the learner understand and remember this article."
+    return f"""
+Create ADHD-friendly study notes from this online article.
+
+Learner goal:
+{goal}
+
+Detail level:
+{detail_level.value}
+
+Use the article text as the source of truth.
+
+# Output Format
+
+Return only the final notes in Markdown. Do not wrap the output in a code block.
+
+Include these sections:
+* Short overview
+* Key takeaways
+* Focus blocks
+* Important definitions
+* Why this matters
+* Quick self-check questions
+* Memory hooks
+* Action steps, if applicable
+
+Style requirements:
+* Use simple, direct language.
+* Keep paragraphs short.
+* Prefer bullets and clear headings.
+* Do not diagnose, provide medical advice, or claim the learner has ADHD.
+
+Article source:
+- title: {title}
+- url: {source.filename}
+- article truncated: {source.truncated}
+
+Article text:
+{source.text}
 """.strip()
 
 

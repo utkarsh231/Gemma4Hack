@@ -6,7 +6,7 @@ import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.core.config import Settings, get_settings
-from app.schemas.chat import ChatMessageRequest, ChatMessageResponse, ChatRole, ChatSessionResponse, YouTubeSessionRequest
+from app.schemas.chat import ChatMessageRequest, ChatMessageResponse, ChatRole, ChatSessionResponse, LinkSessionRequest, YouTubeSessionRequest
 from app.schemas.notes import DetailLevel
 from app.services.chat_store import ChatSession, chat_store
 from app.services.gemma_notes import GemmaNotesService, NotesGenerationError
@@ -89,6 +89,35 @@ async def create_chat_session_from_youtube(
     except RagError as exc:
         chat_store.delete_session(session.id)
         logger.exception("chat_session_youtube_rag_indexing_failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return _session_response(session)
+
+
+@router.post("/sessions/from-link", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
+async def create_chat_session_from_link(
+    payload: LinkSessionRequest,
+    notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)],
+    rag_service: Annotated[PineconeRagService, Depends(get_rag_service)],
+) -> ChatSessionResponse:
+    try:
+        notes, source = await anyio.to_thread.run_sync(
+            partial(
+                notes_service.generate_notes_from_article,
+                url=payload.url,
+                learner_goal=payload.learner_goal,
+                detail_level=payload.detail_level,
+            )
+        )
+    except NotesGenerationError as exc:
+        logger.exception("chat_session_link_notes_generation_failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    session = chat_store.create_session(source=source, initial_notes_markdown=notes.notes_markdown)
+    try:
+        await anyio.to_thread.run_sync(partial(rag_service.index_source, session_id=session.id, source=source))
+    except RagError as exc:
+        chat_store.delete_session(session.id)
+        logger.exception("chat_session_link_rag_indexing_failed")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return _session_response(session)
 

@@ -3,6 +3,7 @@ import pytest
 from app.schemas.notes import DetailLevel, NotesResponse
 from app.services.gemma_notes import (
     NotesGenerationError,
+    build_article_notes_prompt,
     build_chat_prompt,
     build_notes_prompt,
     build_notes_response,
@@ -59,6 +60,26 @@ def test_build_youtube_notes_prompt_requests_timestamped_notes() -> None:
     assert "Timestamped focus blocks" in prompt
     assert "Use timestamps whenever possible" in prompt
     assert "[01:23] Main idea" in prompt
+
+
+def test_build_article_notes_prompt_includes_article_text() -> None:
+    source = ExtractedPdf(
+        filename="https://example.com/article",
+        text="Article title\n\nImportant article body.",
+        page_count=1,
+        extracted_characters=37,
+        truncated=False,
+    )
+    prompt = build_article_notes_prompt(
+        source=source,
+        title="Article title",
+        learner_goal="Study",
+        detail_level=DetailLevel.standard,
+    )
+
+    assert "Create ADHD-friendly study notes from this online article" in prompt
+    assert "Important article body" in prompt
+    assert "Quick self-check questions" in prompt
 
 
 def test_build_chat_prompt_uses_retrieved_context_instead_of_full_source(source: ExtractedPdf) -> None:
