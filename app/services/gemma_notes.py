@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 
 from google import genai
@@ -8,7 +9,14 @@ from app.schemas.chat import DiagnosticQuizOption, DiagnosticQuizQuestion, Sourc
 from app.schemas.notes import DetailLevel, NotesResponse, SourceStats
 from app.services.article_text import extract_article_text
 from app.services.pdf_text import ExtractedPdf
+from app.services.youtube_videos import (
+    YouTubeVideoSearchError,
+    append_recommended_videos_to_notes,
+    search_youtube_learning_videos,
+)
 from app.services.youtube_text import extract_youtube_transcript
+
+logger = logging.getLogger(__name__)
 
 
 class NotesGenerationError(Exception):
@@ -47,7 +55,8 @@ class GemmaNotesService:
         if not text:
             raise NotesGenerationError("Gemma returned an empty response.")
 
-        return build_notes_response(notes_markdown=text, source=extracted_pdf)
+        notes = build_notes_response(notes_markdown=text, source=extracted_pdf)
+        return self.add_video_recommendations(source=extracted_pdf, notes=notes, learner_goal=learner_goal)
 
     def generate_notes_from_article(
         self,
@@ -87,7 +96,8 @@ class GemmaNotesService:
         if not text:
             raise NotesGenerationError("Gemma returned an empty response.")
 
-        return build_notes_response(notes_markdown=text, source=source), source
+        notes = build_notes_response(notes_markdown=text, source=source)
+        return self.add_video_recommendations(source=source, notes=notes, learner_goal=learner_goal), source
 
     def generate_notes_from_youtube(
         self,
@@ -126,7 +136,8 @@ class GemmaNotesService:
         if not text:
             raise NotesGenerationError("Gemma returned an empty response.")
 
-        return build_notes_response(notes_markdown=text, source=source), source
+        notes = build_notes_response(notes_markdown=text, source=source)
+        return self.add_video_recommendations(source=source, notes=notes, learner_goal=learner_goal), source
 
     def answer_question(
         self,
@@ -304,12 +315,35 @@ class GemmaNotesService:
                     ),
                 )
             except Exception:
-                return fallback_focused_notes(source=source, quiz_markdown=quiz_markdown)
+                notes = fallback_focused_notes(source=source, quiz_markdown=quiz_markdown)
+                return self.add_video_recommendations(source=source, notes=notes, learner_goal=learner_goal)
 
         text = getattr(response, "text", None)
         if not text or not text.strip():
-            return fallback_focused_notes(source=source, quiz_markdown=quiz_markdown)
-        return build_notes_response(notes_markdown=text, source=source)
+            notes = fallback_focused_notes(source=source, quiz_markdown=quiz_markdown)
+            return self.add_video_recommendations(source=source, notes=notes, learner_goal=learner_goal)
+        notes = build_notes_response(notes_markdown=text, source=source)
+        return self.add_video_recommendations(source=source, notes=notes, learner_goal=learner_goal)
+
+    def add_video_recommendations(
+        self,
+        *,
+        source: ExtractedPdf,
+        notes: NotesResponse,
+        learner_goal: str | None,
+    ) -> NotesResponse:
+        try:
+            videos = search_youtube_learning_videos(
+                settings=self.settings,
+                source=source,
+                notes_markdown=notes.notes_markdown,
+                learner_goal=learner_goal,
+            )
+        except YouTubeVideoSearchError:
+            logger.warning("youtube_video_recommendations_failed", exc_info=True)
+            videos = []
+        notes_markdown = append_recommended_videos_to_notes(notes.notes_markdown, videos)
+        return notes.model_copy(update={"notes_markdown": notes_markdown, "recommended_videos": videos})
 
 
 def build_notes_prompt(

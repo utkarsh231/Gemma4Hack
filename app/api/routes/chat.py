@@ -306,6 +306,7 @@ async def create_focused_notes_from_quiz(
     return FocusedNotesResponse(
         session_id=session_id,
         notes_markdown=notes.notes_markdown,
+        recommended_videos=notes.recommended_videos,
         chat_session=_session_response(updated_session),
     )
 

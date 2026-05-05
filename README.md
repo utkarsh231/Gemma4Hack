@@ -12,6 +12,7 @@ cp .env.example .env
 ```
 
 Set `GEMINI_API_KEY` and `PINECONE_API_KEY` in `.env`.
+Set `YOUTUBE_API_KEY` if you want generated notes to include recommended explainer videos.
 
 Google's current Gemma-on-Gemini documentation lists hosted Gemma 4 models through the Gemini API. The backend defaults to `gemma-4-26b-a4b-it`; use `gemma-4-31b-it` when you want the larger model.
 
@@ -36,6 +37,13 @@ PINECONE_EMBEDDING_MODEL=llama-text-embed-v2
 RAG_TOP_K=5
 RAG_KEYWORD_TOP_K=4
 RAG_SEMANTIC_TIMEOUT_SECONDS=8
+```
+
+Recommended videos use the YouTube Data API. When `YOUTUBE_API_KEY` is configured, note generation extracts a few learning topics from the generated notes/source and returns embed-ready video metadata in `recommended_videos`. If the key is missing or YouTube search fails, note generation still succeeds with an empty video list.
+
+```env
+YOUTUBE_API_KEY=
+YOUTUBE_MAX_VIDEOS=4
 ```
 
 ## Run
@@ -65,7 +73,18 @@ The response returns Markdown notes plus source metadata:
     "page_count": 10,
     "extracted_characters": 25000,
     "truncated": false
-  }
+  },
+  "recommended_videos": [
+    {
+      "video_id": "VIDEO_ID",
+      "title": "Topic explained",
+      "channel_title": "Education Channel",
+      "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+      "embed_url": "https://www.youtube.com/embed/VIDEO_ID",
+      "thumbnail_url": "https://...",
+      "search_query": "topic beginner explanation tutorial"
+    }
+  ]
 }
 ```
 

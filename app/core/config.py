@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     gemma_model: str = Field(default="gemma-4-26b-a4b-it", alias="GEMMA_MODEL")
+    youtube_api_key: str | None = Field(default=None, alias="YOUTUBE_API_KEY")
+    youtube_max_videos: int = Field(default=4, ge=0, le=8, alias="YOUTUBE_MAX_VIDEOS")
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: str | None = Field(default=None, alias="SUPABASE_ANON_KEY")
     pinecone_api_key: str | None = Field(default=None, alias="PINECONE_API_KEY")

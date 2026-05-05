@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.notes import DetailLevel, SourceStats
+from app.schemas.notes import DetailLevel, RecommendedVideo, SourceStats
 
 
 class ChatRole(StrEnum):
@@ -91,6 +91,7 @@ class DiagnosticQuizSubmitRequest(BaseModel):
 class FocusedNotesResponse(BaseModel):
     session_id: str
     notes_markdown: str = Field(min_length=1)
+    recommended_videos: list[RecommendedVideo] = Field(default_factory=list, max_length=8)
     chat_session: ChatSessionResponse
 
 
