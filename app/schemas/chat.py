@@ -36,6 +36,64 @@ class ChatMessageResponse(BaseModel):
     message: ChatMessage
 
 
+class SourceSection(BaseModel):
+    id: str = Field(min_length=1, max_length=40)
+    title: str = Field(min_length=1, max_length=160)
+    summary: str = Field(min_length=1, max_length=1200)
+    source_excerpt: str = Field(min_length=1, max_length=2000)
+
+
+class SourceSectionsResponse(BaseModel):
+    session_id: str
+    sections: list[SourceSection] = Field(min_length=1, max_length=8)
+
+
+class DiagnosticQuizOption(BaseModel):
+    id: str = Field(min_length=1, max_length=20)
+    text: str = Field(min_length=1, max_length=500)
+
+
+class DiagnosticQuizQuestion(BaseModel):
+    id: str = Field(min_length=1, max_length=40)
+    unit_title: str = Field(min_length=1, max_length=160)
+    question: str = Field(min_length=1, max_length=500)
+    options: list[DiagnosticQuizOption] = Field(min_length=3, max_length=4)
+    correct_option_id: str = Field(min_length=1, max_length=20)
+    explanation: str = Field(min_length=1, max_length=800)
+    key_takeaway: str = Field(default="", max_length=800)
+    study_note: str = Field(default="", max_length=1600)
+    source_excerpt: str = Field(default="", max_length=1200)
+
+
+class DiagnosticQuizResponse(BaseModel):
+    session_id: str
+    questions: list[DiagnosticQuizQuestion] = Field(min_length=1, max_length=8)
+
+
+class DiagnosticQuizCreateRequest(BaseModel):
+    learner_goal: str | None = Field(default=None, max_length=500)
+    sections: list[SourceSection] = Field(min_length=1, max_length=8)
+
+
+class DiagnosticQuizAnswer(BaseModel):
+    question_id: str = Field(min_length=1, max_length=40)
+    selected_option_id: str | None = Field(default=None, max_length=20)
+    confidence: int = Field(ge=0, le=100)
+
+
+class DiagnosticQuizSubmitRequest(BaseModel):
+    learner_goal: str | None = Field(default=None, max_length=500)
+    detail_level: DetailLevel = DetailLevel.standard
+    answers: list[DiagnosticQuizAnswer] = Field(min_length=1, max_length=8)
+    questions: list[DiagnosticQuizQuestion] = Field(min_length=1, max_length=8)
+
+
+class FocusedNotesResponse(BaseModel):
+    session_id: str
+    notes_markdown: str = Field(min_length=1)
+    chat_session: ChatSessionResponse
+
+
 class LinkSessionRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
     learner_goal: str | None = Field(default=None, max_length=500)

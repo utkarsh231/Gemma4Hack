@@ -70,6 +70,18 @@ class InMemoryChatStore:
             session.messages.append(message)
         return message
 
+    def replace_initial_notes(self, *, session_id: str, notes_markdown: str) -> ChatMessage | None:
+        message = self._build_message(role=ChatRole.assistant, content_markdown=notes_markdown)
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            if session.messages:
+                session.messages[0] = message
+            else:
+                session.messages.append(message)
+        return message
+
     @staticmethod
     def _build_message(*, role: ChatRole, content_markdown: str) -> ChatMessage:
         return ChatMessage(

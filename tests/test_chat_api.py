@@ -7,61 +7,11 @@ from app.api.routes.chat import get_notes_service, get_rag_service
 from app.main import app
 from app.schemas.notes import DetailLevel
 from app.services.chat_store import chat_store
-from app.services.gemma_notes import build_notes_response
 from app.services.pdf_text import ExtractedPdf
 from app.services.rag import RetrievedChunk
 
 
 class FakeNotesService:
-    def generate_notes(
-        self,
-        extracted_pdf: ExtractedPdf,
-        learner_goal: str | None,
-        detail_level: DetailLevel,
-    ):
-        return build_notes_response(
-            notes_markdown="### **Generated Notes**\n\n**Overview:**\nThis is a test note.",
-            source=extracted_pdf,
-        )
-
-    def generate_notes_from_article(
-        self,
-        *,
-        url: str,
-        learner_goal: str | None,
-        detail_level: DetailLevel,
-    ):
-        source = ExtractedPdf(
-            filename=url,
-            text="Article title\n\nThis article explains attention and learning.",
-            page_count=1,
-            extracted_characters=57,
-            truncated=False,
-        )
-        return build_notes_response(
-            notes_markdown="### **Article Notes**\n\n**Overview:**\nThis is a test article note.",
-            source=source,
-        ), source
-
-    def generate_notes_from_youtube(
-        self,
-        *,
-        youtube_url: str,
-        learner_goal: str | None,
-        detail_level: DetailLevel,
-    ):
-        source = ExtractedPdf(
-            filename=youtube_url,
-            text="### **Video Notes**\n\n[00:00] This video explains attention and learning.",
-            page_count=1,
-            extracted_characters=71,
-            truncated=False,
-        )
-        return build_notes_response(
-            notes_markdown=source.text,
-            source=source,
-        ), source
-
     def answer_question(
         self,
         *,
@@ -95,6 +45,34 @@ def fake_dependencies(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
             truncated=False,
         ),
     )
+    monkeypatch.setattr(
+        chat_routes,
+        "extract_youtube_transcript",
+        lambda url, max_chars: type(
+            "Transcript",
+            (),
+            {
+                "text": "[00:00] This video explains attention and learning.",
+                "extracted_characters": 52,
+                "truncated": False,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        chat_routes,
+        "extract_article_text",
+        lambda url, max_chars: type(
+            "Article",
+            (),
+            {
+                "url": url,
+                "title": "Article title",
+                "text": "This article explains attention and learning.",
+                "extracted_characters": 45,
+                "truncated": False,
+            },
+        )(),
+    )
     app.dependency_overrides[get_notes_service] = lambda: FakeNotesService()
     app.dependency_overrides[get_rag_service] = lambda: FakeRagService()
     yield
@@ -115,7 +93,7 @@ def test_create_chat_session_and_ask_question() -> None:
     created = create_response.json()
     assert created["session_id"]
     assert created["messages"][0]["role"] == "assistant"
-    assert "Generated Notes" in created["messages"][0]["content_markdown"]
+    assert "Preparing your adaptive notes" in created["messages"][0]["content_markdown"]
 
     message_response = client.post(
         f"/api/v1/chat/sessions/{created['session_id']}/messages",
@@ -145,7 +123,7 @@ def test_create_chat_session_from_youtube() -> None:
     created = create_response.json()
     assert created["session_id"]
     assert created["source_stats"]["filename"] == "https://www.youtube.com/watch?v=abc123"
-    assert "Video Notes" in created["messages"][0]["content_markdown"]
+    assert "Preparing your adaptive notes" in created["messages"][0]["content_markdown"]
 
 
 def test_create_chat_session_from_link() -> None:
@@ -164,4 +142,4 @@ def test_create_chat_session_from_link() -> None:
     created = create_response.json()
     assert created["session_id"]
     assert created["source_stats"]["filename"] == "https://example.com/article"
-    assert "Article Notes" in created["messages"][0]["content_markdown"]
+    assert "Preparing your adaptive notes" in created["messages"][0]["content_markdown"]

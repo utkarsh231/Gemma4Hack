@@ -6,8 +6,21 @@ import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.core.config import Settings, get_settings
-from app.schemas.chat import ChatMessageRequest, ChatMessageResponse, ChatRole, ChatSessionResponse, LinkSessionRequest, YouTubeSessionRequest
+from app.schemas.chat import (
+    ChatMessageRequest,
+    ChatMessageResponse,
+    ChatRole,
+    ChatSessionResponse,
+    DiagnosticQuizCreateRequest,
+    DiagnosticQuizResponse,
+    DiagnosticQuizSubmitRequest,
+    FocusedNotesResponse,
+    LinkSessionRequest,
+    SourceSectionsResponse,
+    YouTubeSessionRequest,
+)
 from app.schemas.notes import DetailLevel
+from app.services.article_text import ArticleExtractionError, extract_article_text
 from app.services.chat_store import ChatSession, chat_store
 from app.services.gemma_notes import GemmaNotesService, NotesGenerationError
 from app.services.pdf_text import ExtractedPdf
@@ -19,10 +32,16 @@ from app.services.rag import (
     merge_retrieved_chunks,
     retrieve_keyword_chunks,
 )
+from app.services.youtube_text import YouTubeExtractionError, extract_youtube_transcript
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+PENDING_NOTES_MARKDOWN = (
+    "### Preparing your adaptive notes\n\n"
+    "FocusPath has read your source. Take the warm-up quiz first, then Gemma will build notes around your answers and confidence."
+)
 
 
 def get_notes_service(settings: Annotated[Settings, Depends(get_settings)]) -> GemmaNotesService:
@@ -33,6 +52,29 @@ def get_rag_service(settings: Annotated[Settings, Depends(get_settings)]) -> Pin
     return PineconeRagService(settings=settings)
 
 
+async def _create_source_only_session(
+    *,
+    source: ExtractedPdf,
+    session_id: str | None,
+    material_id: str | None,
+    rag_service: PineconeRagService,
+    indexing_log_name: str,
+) -> ChatSessionResponse:
+    session = chat_store.create_session(
+        source=source,
+        initial_notes_markdown=PENDING_NOTES_MARKDOWN,
+        session_id=session_id,
+        material_id=material_id,
+    )
+    try:
+        await anyio.to_thread.run_sync(partial(_index_source, rag_service=rag_service, session=session, source=source))
+    except RagError as exc:
+        chat_store.delete_session(session.id)
+        logger.exception(indexing_log_name)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return _session_response(session)
+
+
 @router.post("/sessions/from-pdf", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_chat_session_from_pdf(
     file: Annotated[UploadFile, File(description="PDF study material to transform into a chat session.")],
@@ -41,103 +83,74 @@ async def create_chat_session_from_pdf(
     session_id: Annotated[str | None, Form(max_length=100)] = None,
     material_id: Annotated[str | None, Form(max_length=100)] = None,
     settings: Annotated[Settings, Depends(get_settings)] = None,
-    notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)] = None,
     rag_service: Annotated[PineconeRagService, Depends(get_rag_service)] = None,
 ) -> ChatSessionResponse:
     extracted = await _extract_uploaded_pdf(file=file, settings=settings)
-
-    try:
-        notes = await anyio.to_thread.run_sync(
-            notes_service.generate_notes,
-            extracted,
-            learner_goal,
-            detail_level,
-        )
-    except NotesGenerationError as exc:
-        logger.exception("chat_session_notes_generation_failed")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    session = chat_store.create_session(
+    return await _create_source_only_session(
         source=extracted,
-        initial_notes_markdown=notes.notes_markdown,
         session_id=session_id,
         material_id=material_id,
+        rag_service=rag_service,
+        indexing_log_name="chat_session_rag_indexing_failed",
     )
-    try:
-        await anyio.to_thread.run_sync(partial(_index_source, rag_service=rag_service, session=session, source=extracted))
-    except RagError as exc:
-        chat_store.delete_session(session.id)
-        logger.exception("chat_session_rag_indexing_failed")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return _session_response(session)
 
 
 @router.post("/sessions/from-youtube", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_chat_session_from_youtube(
     payload: YouTubeSessionRequest,
-    notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
     rag_service: Annotated[PineconeRagService, Depends(get_rag_service)],
 ) -> ChatSessionResponse:
     try:
-        notes, source = await anyio.to_thread.run_sync(
-            partial(
-                notes_service.generate_notes_from_youtube,
-                youtube_url=payload.url,
-                learner_goal=payload.learner_goal,
-                detail_level=payload.detail_level,
-            )
+        transcript = await anyio.to_thread.run_sync(
+            partial(extract_youtube_transcript, payload.url, max_chars=settings.max_extracted_chars)
         )
-    except NotesGenerationError as exc:
-        logger.exception("chat_session_youtube_notes_generation_failed")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except YouTubeExtractionError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    session = chat_store.create_session(
+    source = ExtractedPdf(
+        filename=payload.url,
+        text=transcript.text,
+        page_count=1,
+        extracted_characters=transcript.extracted_characters,
+        truncated=transcript.truncated,
+    )
+    return await _create_source_only_session(
         source=source,
-        initial_notes_markdown=notes.notes_markdown,
         session_id=payload.session_id,
         material_id=payload.material_id,
+        rag_service=rag_service,
+        indexing_log_name="chat_session_youtube_rag_indexing_failed",
     )
-    try:
-        await anyio.to_thread.run_sync(partial(_index_source, rag_service=rag_service, session=session, source=source))
-    except RagError as exc:
-        chat_store.delete_session(session.id)
-        logger.exception("chat_session_youtube_rag_indexing_failed")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return _session_response(session)
 
 
 @router.post("/sessions/from-link", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_chat_session_from_link(
     payload: LinkSessionRequest,
-    notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
     rag_service: Annotated[PineconeRagService, Depends(get_rag_service)],
 ) -> ChatSessionResponse:
     try:
-        notes, source = await anyio.to_thread.run_sync(
-            partial(
-                notes_service.generate_notes_from_article,
-                url=payload.url,
-                learner_goal=payload.learner_goal,
-                detail_level=payload.detail_level,
-            )
+        article = await anyio.to_thread.run_sync(
+            partial(extract_article_text, payload.url, max_chars=settings.max_extracted_chars)
         )
-    except NotesGenerationError as exc:
-        logger.exception("chat_session_link_notes_generation_failed")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ArticleExtractionError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    session = chat_store.create_session(
+    source = ExtractedPdf(
+        filename=article.url,
+        text=f"{article.title}\n\n{article.text}",
+        page_count=1,
+        extracted_characters=article.extracted_characters,
+        truncated=article.truncated,
+    )
+    return await _create_source_only_session(
         source=source,
-        initial_notes_markdown=notes.notes_markdown,
         session_id=payload.session_id,
         material_id=payload.material_id,
+        rag_service=rag_service,
+        indexing_log_name="chat_session_link_rag_indexing_failed",
     )
-    try:
-        await anyio.to_thread.run_sync(partial(_index_source, rag_service=rag_service, session=session, source=source))
-    except RagError as exc:
-        chat_store.delete_session(session.id)
-        logger.exception("chat_session_link_rag_indexing_failed")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return _session_response(session)
 
 
 @router.post("/sessions/{session_id}/messages", response_model=ChatMessageResponse)
@@ -212,6 +225,91 @@ async def create_chat_message(
     return ChatMessageResponse(session_id=session_id, message=assistant_message)
 
 
+@router.post("/sessions/{session_id}/sections", response_model=SourceSectionsResponse)
+async def create_source_sections(
+    session_id: str,
+    notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)],
+    learner_goal: str | None = None,
+) -> SourceSectionsResponse:
+    session = chat_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+
+    try:
+        sections = await anyio.to_thread.run_sync(
+            partial(notes_service.generate_source_sections, source=session.source, learner_goal=learner_goal)
+        )
+    except NotesGenerationError as exc:
+        logger.exception("source_sections_generation_failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    return SourceSectionsResponse(session_id=session_id, sections=sections)
+
+
+@router.post("/sessions/{session_id}/quiz", response_model=DiagnosticQuizResponse)
+async def create_diagnostic_quiz(
+    session_id: str,
+    payload: DiagnosticQuizCreateRequest,
+    notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)],
+) -> DiagnosticQuizResponse:
+    session = chat_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+
+    try:
+        questions = await anyio.to_thread.run_sync(
+            partial(
+                notes_service.generate_diagnostic_quiz,
+                sections=payload.sections,
+                learner_goal=payload.learner_goal,
+            )
+        )
+    except NotesGenerationError as exc:
+        logger.exception("diagnostic_quiz_generation_failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    return DiagnosticQuizResponse(session_id=session_id, questions=questions)
+
+
+@router.post("/sessions/{session_id}/quiz-results", response_model=FocusedNotesResponse)
+async def create_focused_notes_from_quiz(
+    session_id: str,
+    payload: DiagnosticQuizSubmitRequest,
+    notes_service: Annotated[GemmaNotesService, Depends(get_notes_service)],
+) -> FocusedNotesResponse:
+    session = chat_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+
+    try:
+        notes = await anyio.to_thread.run_sync(
+            partial(
+                notes_service.generate_focused_notes,
+                source=session.source,
+                learner_goal=payload.learner_goal,
+                detail_level=payload.detail_level,
+                quiz_markdown=_quiz_results_markdown(payload),
+            )
+        )
+    except NotesGenerationError as exc:
+        logger.exception("focused_notes_generation_failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    updated_message = chat_store.replace_initial_notes(session_id=session_id, notes_markdown=notes.notes_markdown)
+    if updated_message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+
+    updated_session = chat_store.get_session(session_id)
+    if updated_session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+
+    return FocusedNotesResponse(
+        session_id=session_id,
+        notes_markdown=notes.notes_markdown,
+        chat_session=_session_response(updated_session),
+    )
+
+
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
 async def get_chat_session(session_id: str) -> ChatSessionResponse:
     session = chat_store.get_session(session_id)
@@ -257,6 +355,43 @@ def _conversation_markdown(session: ChatSession) -> str:
     return "\n\n".join(
         f"{message.role.value.upper()}:\n{message.content_markdown}" for message in recent_messages
     )
+
+
+def _quiz_results_markdown(payload: DiagnosticQuizSubmitRequest) -> str:
+    answer_by_question = {answer.question_id: answer for answer in payload.answers}
+    lines = []
+
+    for question in payload.questions:
+        answer = answer_by_question.get(question.id)
+        selected_option = None
+        if answer and answer.selected_option_id:
+            selected_option = next(
+                (option for option in question.options if option.id == answer.selected_option_id),
+                None,
+            )
+        correct_option = next(
+            (option for option in question.options if option.id == question.correct_option_id),
+            None,
+        )
+        is_correct = bool(answer and answer.selected_option_id == question.correct_option_id)
+        confidence = answer.confidence if answer else 0
+        needs_focus = (not is_correct) or confidence < 60
+
+        lines.extend(
+            [
+                f"## {question.unit_title}",
+                f"Question: {question.question}",
+                f"Selected answer: {selected_option.text if selected_option else 'Not sure / no answer'}",
+                f"Correct answer: {correct_option.text if correct_option else question.correct_option_id}",
+                f"Result: {'correct' if is_correct else 'incorrect'}",
+                f"Confidence: {confidence}%",
+                f"Needs extra focus: {'yes' if needs_focus else 'no'}",
+                f"Explanation: {question.explanation}",
+                "",
+            ]
+        )
+
+    return "\n".join(lines).strip()
 
 
 async def _retrieve_semantic_chunks(
