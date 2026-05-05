@@ -22,7 +22,6 @@ STOPWORDS = {
     "blocks",
     "breakpoint",
     "check",
-    "deep",
     "definition",
     "definitions",
     "focus",
@@ -62,6 +61,7 @@ def search_youtube_learning_videos(
     source: ExtractedPdf,
     notes_markdown: str,
     learner_goal: str | None = None,
+    query_topics: list[str] | None = None,
     max_videos: int | None = None,
     http_get: HttpGet | None = None,
 ) -> list[RecommendedVideo]:
@@ -76,7 +76,8 @@ def search_youtube_learning_videos(
         source=source,
         notes_markdown=notes_markdown,
         learner_goal=learner_goal,
-        max_queries=min(3, target_count),
+        query_topics=query_topics,
+        max_queries=min(5, max(3, target_count)),
     )
     if not queries:
         return []
@@ -86,17 +87,15 @@ def search_youtube_learning_videos(
     get = http_get or httpx.get
 
     for query in queries:
-        payload = fetch_youtube_search_payload(settings=settings, query=query, max_results=target_count, http_get=get)
+        payload = fetch_youtube_search_payload(settings=settings, query=query, max_results=max(target_count * 2, 6), http_get=get)
         for item in payload.get("items", []):
             video = parse_youtube_search_item(item=item, search_query=query)
             if video is None or video.video_id in seen_video_ids:
                 continue
             videos.append(video)
             seen_video_ids.add(video.video_id)
-            if len(videos) >= target_count:
-                return videos
 
-    return videos
+    return rank_videos_for_source(videos=videos, source=source, notes_markdown=notes_markdown, query_topics=query_topics)[:target_count]
 
 
 def append_recommended_videos_to_notes(notes_markdown: str, videos: list[RecommendedVideo]) -> str:
@@ -179,15 +178,17 @@ def build_video_search_queries(
     source: ExtractedPdf,
     notes_markdown: str,
     learner_goal: str | None,
+    query_topics: list[str] | None = None,
     max_queries: int,
 ) -> list[str]:
     candidates: list[str] = []
 
-    if learner_goal and learner_goal.strip():
-        candidates.append(learner_goal.strip())
+    candidates.extend(query_topics or [])
 
     candidates.extend(extract_markdown_headings(notes_markdown))
     candidates.extend(extract_source_title_candidates(source))
+    if learner_goal and learner_goal.strip():
+        candidates.append(learner_goal.strip())
     candidates.extend(extract_keyword_phrases(notes_markdown))
 
     queries: list[str] = []
@@ -202,6 +203,49 @@ def build_video_search_queries(
             break
 
     return queries
+
+
+def rank_videos_for_source(
+    *,
+    videos: list[RecommendedVideo],
+    source: ExtractedPdf,
+    notes_markdown: str,
+    query_topics: list[str] | None,
+) -> list[RecommendedVideo]:
+    source_keywords = extract_relevance_keywords(" ".join([source.text[:12_000], notes_markdown[:8_000], " ".join(query_topics or [])]))
+    query_keyword_sets = {
+        video.search_query: set(extract_relevance_keywords(video.search_query))
+        for video in videos
+    }
+
+    def score(video: RecommendedVideo) -> tuple[int, int]:
+        title_keywords = set(extract_relevance_keywords(f"{video.title} {video.channel_title}"))
+        query_keywords = query_keyword_sets.get(video.search_query, set())
+        score_value = 0
+        score_value += 5 * len(title_keywords & query_keywords)
+        score_value += 2 * len(title_keywords & set(source_keywords[:40]))
+        if any(term in video.title.lower() for term in ("explained", "tutorial", "lecture", "introduction")):
+            score_value += 2
+        if re.search(r"#|shorts?|tiktok|viral|reaction", video.title, flags=re.IGNORECASE):
+            score_value -= 4
+        return score_value, -len(video.title)
+
+    return sorted(videos, key=score, reverse=True)
+
+
+def extract_relevance_keywords(text: str) -> list[str]:
+    words = [
+        word.lower()
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9+-]{2,}", strip_markdown(text))
+        if word.lower() not in STOPWORDS
+    ]
+    scored: dict[str, int] = {}
+    for word in words:
+        scored[word] = scored.get(word, 0) + 1
+    return [
+        word
+        for word, _ in sorted(scored.items(), key=lambda item: (item[1], len(item[0])), reverse=True)
+    ]
 
 
 def extract_markdown_headings(markdown: str) -> list[str]:

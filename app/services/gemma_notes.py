@@ -333,17 +333,53 @@ class GemmaNotesService:
         learner_goal: str | None,
     ) -> NotesResponse:
         try:
+            query_topics = self.generate_video_query_topics(source=source, notes_markdown=notes.notes_markdown, learner_goal=learner_goal)
             videos = search_youtube_learning_videos(
                 settings=self.settings,
                 source=source,
                 notes_markdown=notes.notes_markdown,
                 learner_goal=learner_goal,
+                query_topics=query_topics,
             )
         except YouTubeVideoSearchError:
             logger.warning("youtube_video_recommendations_failed", exc_info=True)
             videos = []
         notes_markdown = append_recommended_videos_to_notes(notes.notes_markdown, videos)
         return notes.model_copy(update={"notes_markdown": notes_markdown, "recommended_videos": videos})
+
+    def generate_video_query_topics(
+        self,
+        *,
+        source: ExtractedPdf,
+        notes_markdown: str,
+        learner_goal: str | None,
+    ) -> list[str]:
+        if not self.settings.gemini_api_key or not self.settings.youtube_api_key:
+            return []
+
+        client = genai.Client(api_key=self.settings.gemini_api_key)
+        try:
+            response = client.models.generate_content(
+                model=self.settings.gemma_model,
+                contents=build_video_query_topics_prompt(
+                    source=source,
+                    notes_markdown=notes_markdown,
+                    learner_goal=learner_goal,
+                    max_source_chars=10_000,
+                ),
+            )
+        except Exception:
+            logger.warning("youtube_video_query_topics_failed", exc_info=True)
+            return []
+
+        text = getattr(response, "text", None)
+        if not text or not text.strip():
+            return []
+        try:
+            return parse_video_query_topics(text)
+        except NotesGenerationError:
+            logger.warning("youtube_video_query_topics_parse_failed", exc_info=True)
+            return []
 
 
 def build_notes_prompt(
@@ -469,6 +505,46 @@ PDF metadata:
 
 PDF text:
 {extracted_pdf.text}
+""".strip()
+
+
+def build_video_query_topics_prompt(
+    *,
+    source: ExtractedPdf,
+    notes_markdown: str,
+    learner_goal: str | None,
+    max_source_chars: int,
+) -> str:
+    goal = learner_goal.strip() if learner_goal and learner_goal.strip() else "Help the learner understand this material."
+    excerpt = source_excerpt(source, max_chars=max_source_chars)
+    return f"""
+Create highly specific YouTube search topics for finding videos that match this study material.
+
+Learner goal:
+{goal}
+
+Rules:
+* Return 3 to 5 search topics.
+* Prefer exact concepts, methods, task names, paper/article title terms, dataset names, model names, and domain-specific phrases from the source.
+* Avoid generic note labels like overview, key takeaways, focus blocks, important definitions, study notes, quiz, ADHD, or memory hooks.
+* Avoid broad one-word topics unless the source itself is broad.
+* Each topic should be useful as a YouTube search query before adding beginner/explanation/tutorial words.
+* If the material is a research paper, include one query for the paper's specific problem or method, not only the general field.
+
+Return only valid JSON. Do not wrap it in a code block.
+
+JSON shape:
+{{"topics":["specific search topic","specific search topic"]}}
+
+Generated notes:
+{notes_markdown[:8000]}
+
+Source metadata:
+- filename: {source.filename}
+- text truncated: {source.truncated}
+
+Source text:
+{excerpt}
 """.strip()
 
 
@@ -836,6 +912,44 @@ def parse_diagnostic_quiz(raw_text: str) -> list[DiagnosticQuizQuestion]:
         if question.correct_option_id not in option_ids:
             raise NotesGenerationError("Gemma quiz response had a correct option id that was not in the options.")
     return questions
+
+
+def parse_video_query_topics(raw_text: str) -> list[str]:
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
+        cleaned = cleaned.removesuffix("```").strip()
+
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise NotesGenerationError("Gemma returned video topic JSON that could not be parsed.") from exc
+
+    topics_payload = payload.get("topics") if isinstance(payload, dict) else None
+    if not isinstance(topics_payload, list):
+        raise NotesGenerationError("Gemma video topic response did not include a topics list.")
+
+    topics: list[str] = []
+    seen: set[str] = set()
+    forbidden = re.compile(
+        r"\b(overview|takeaways|focus blocks?|important definitions?|study notes?|quiz|adhd|memory hooks?)\b",
+        flags=re.IGNORECASE,
+    )
+    for topic in topics_payload:
+        if not isinstance(topic, str):
+            continue
+        cleaned_topic = re.sub(r"\s+", " ", topic).strip(" .-")
+        if not cleaned_topic or forbidden.search(cleaned_topic):
+            continue
+        normalized = cleaned_topic.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        topics.append(cleaned_topic[:180])
+        if len(topics) >= 5:
+            break
+
+    return topics
 
 
 def parse_source_sections(raw_text: str) -> list[SourceSection]:

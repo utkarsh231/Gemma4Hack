@@ -25,13 +25,32 @@ def test_build_video_search_queries_prefers_learner_goal_and_note_headings() -> 
         source=source(),
         notes_markdown="# Short Overview\n\n## Gradient Descent\n\n## Learning Rate",
         learner_goal="Understand ML optimization",
+        query_topics=None,
         max_queries=3,
     )
 
     assert queries == [
-        "Understand ML optimization beginner explanation tutorial",
         "Gradient Descent beginner explanation tutorial",
         "Learning Rate beginner explanation tutorial",
+        "Gradient Descent for Machine Learning beginner explanation tutorial",
+    ]
+
+
+def test_build_video_search_queries_prefers_source_specific_query_topics() -> None:
+    queries = build_video_search_queries(
+        source=source(),
+        notes_markdown="# Short Overview\n\n## Gradient Descent\n\n## Learning Rate",
+        learner_goal="Understand ML optimization",
+        query_topics=[
+            "variational embedding technique object categorization",
+            "deep neural network visual semantic similarity human perception",
+        ],
+        max_queries=3,
+    )
+
+    assert queries[:2] == [
+        "variational embedding technique object categorization beginner explanation tutorial",
+        "deep neural network visual semantic similarity human perception beginner explanation tutorial",
     ]
 
 
@@ -113,6 +132,7 @@ def test_search_youtube_learning_videos_uses_youtube_api_payload() -> None:
         settings=Settings(YOUTUBE_API_KEY="test-key", YOUTUBE_MAX_VIDEOS=1),
         source=source(),
         notes_markdown="## Gradient Descent",
+        query_topics=["gradient descent learning rate"],
         http_get=fake_get,
     )
 

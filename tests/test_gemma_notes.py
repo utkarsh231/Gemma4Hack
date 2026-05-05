@@ -8,6 +8,7 @@ from app.services.gemma_notes import (
     build_notes_prompt,
     build_notes_response,
     build_youtube_notes_prompt,
+    parse_video_query_topics,
 )
 from app.services.pdf_text import ExtractedPdf
 
@@ -94,3 +95,16 @@ def test_build_chat_prompt_uses_retrieved_context_instead_of_full_source(source:
     assert "Retrieved document context:" in prompt
     assert "Relevant chunk" in prompt
     assert source.text not in prompt
+
+
+def test_parse_video_query_topics_filters_generic_note_labels() -> None:
+    topics = parse_video_query_topics(
+        """
+        {"topics":["Short Overview","variational embedding technique object categorization","Deep neural network visual semantic similarity"]}
+        """
+    )
+
+    assert topics == [
+        "variational embedding technique object categorization",
+        "Deep neural network visual semantic similarity",
+    ]
