@@ -77,7 +77,7 @@ def fake_dependencies(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     app.dependency_overrides[get_rag_service] = lambda: FakeRagService()
     yield
     app.dependency_overrides.clear()
-    chat_store._sessions.clear()
+    chat_store.reset()
 
 
 def test_create_chat_session_and_ask_question() -> None:
@@ -93,6 +93,8 @@ def test_create_chat_session_and_ask_question() -> None:
     created = create_response.json()
     assert created["session_id"]
     assert created["messages"][0]["role"] == "assistant"
+    assert created["status"] == "active"
+    assert created["xp_awarded"] == 0
     assert "Preparing your adaptive notes" in created["messages"][0]["content_markdown"]
 
     message_response = client.post(
@@ -105,6 +107,70 @@ def test_create_chat_session_and_ask_question() -> None:
     assert message["role"] == "assistant"
     assert "What should I remember first?" in message["content_markdown"]
     assert "Attention improves with small study blocks." in message["content_markdown"]
+
+
+def test_complete_chat_session_awards_xp_from_time_and_updates_summary() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/v1/chat/sessions/from-pdf",
+        files={"file": ("lesson.pdf", b"%PDF-1.4 fake test bytes", "application/pdf")},
+        data={"learner_goal": "Study", "detail_level": "standard"},
+    )
+    session_id = create_response.json()["session_id"]
+
+    complete_response = client.post(
+        f"/api/v1/chat/sessions/{session_id}/complete",
+        json={"actual_duration_seconds": 25 * 60},
+    )
+
+    assert complete_response.status_code == 200
+    completed = complete_response.json()
+    assert completed["xp_earned"] == 100
+    assert completed["xp_breakdown"] == {
+        "session_completion_xp": 50,
+        "focus_time_xp": 50,
+        "quiz_completion_xp": 0,
+        "milestone_bonus_xp": 0,
+    }
+    assert completed["chat_session"]["status"] == "completed"
+    assert completed["chat_session"]["actual_duration_seconds"] == 1500
+    assert completed["chat_session"]["xp_awarded"] == 100
+    assert completed["xp_summary"]["total_xp"] == 100
+    assert completed["xp_summary"]["completed_tracks"] == 1
+    assert completed["xp_summary"]["total_focus_seconds"] == 1500
+
+    summary_response = client.get("/api/v1/chat/xp")
+
+    assert summary_response.status_code == 200
+    assert summary_response.json()["total_xp"] == 100
+
+
+def test_complete_chat_session_is_idempotent() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/v1/chat/sessions/from-pdf",
+        files={"file": ("lesson.pdf", b"%PDF-1.4 fake test bytes", "application/pdf")},
+        data={"learner_goal": "Study", "detail_level": "standard"},
+    )
+    session_id = create_response.json()["session_id"]
+
+    first_response = client.post(
+        f"/api/v1/chat/sessions/{session_id}/complete",
+        json={"actual_duration_seconds": 60},
+    )
+    second_response = client.post(
+        f"/api/v1/chat/sessions/{session_id}/complete",
+        json={"actual_duration_seconds": 60 * 60},
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()["xp_earned"] == 52
+    assert second_response.json()["xp_earned"] == 52
+    assert second_response.json()["xp_summary"]["total_xp"] == 52
+    assert second_response.json()["xp_summary"]["completed_tracks"] == 1
 
 
 def test_create_chat_session_from_youtube() -> None:

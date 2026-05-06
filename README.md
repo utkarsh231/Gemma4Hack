@@ -13,6 +13,8 @@ cp .env.example .env
 
 Set `GEMINI_API_KEY` and `PINECONE_API_KEY` in `.env`.
 Set `YOUTUBE_API_KEY` if you want generated notes to include recommended explainer videos.
+Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and backend-only `SUPABASE_SERVICE_ROLE_KEY`
+to verify auth tokens and persist XP rewards to Supabase.
 
 Google's current Gemma-on-Gemini documentation lists hosted Gemma 4 models through the Gemini API. The backend defaults to `gemma-4-26b-a4b-it`; use `gemma-4-31b-it` when you want the larger model.
 
@@ -127,6 +129,27 @@ Ask a follow-up question:
 curl -X POST "http://127.0.0.1:8000/api/v1/chat/sessions/{session_id}/messages" \
   -H "Content-Type: application/json" \
   -d '{"message":"What are the 3 most important ideas?"}'
+```
+
+Complete a session and award XP:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/chat/sessions/{session_id}/complete" \
+  -H "Content-Type: application/json" \
+  -d '{"actual_duration_seconds":1500}'
+```
+
+The completion response includes `xp_earned`, `xp_breakdown`, `xp_summary`, and the updated `chat_session`.
+Use `xp_earned` for the session-complete UI, then show `xp_summary.total_xp`, `xp_summary.current_level`,
+`xp_summary.current_tier_display_name`, `xp_summary.completed_tracks`, and `xp_summary.total_focus_seconds`
+in the learner profile/header.
+Include the user's Supabase access token as `Authorization: Bearer <token>` to persist XP to Supabase.
+Without a bearer token, local in-memory XP is returned for development.
+
+Fetch the current XP summary:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/chat/xp"
 ```
 
 Chat sessions are stored in memory, so sessions reset when the server restarts. PDF chunks are indexed in Pinecone under the chat session ID namespace and retrieved for each follow-up question.

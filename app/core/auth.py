@@ -60,3 +60,12 @@ async def get_current_user(
         email=payload.get("email"),
         user_metadata=payload.get("user_metadata") or {},
     )
+
+
+async def get_optional_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AuthenticatedUser | None:
+    if credentials is None:
+        return None
+    return await get_current_user(credentials=credentials, settings=settings)

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     youtube_max_videos: int = Field(default=4, ge=0, le=8, alias="YOUTUBE_MAX_VIDEOS")
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: str | None = Field(default=None, alias="SUPABASE_ANON_KEY")
+    supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
     pinecone_api_key: str | None = Field(default=None, alias="PINECONE_API_KEY")
     pinecone_index_name: str = Field(default="gemma4hack-study-chunks", alias="PINECONE_INDEX_NAME")
     pinecone_cloud: str = Field(default="aws", alias="PINECONE_CLOUD")

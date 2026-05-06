@@ -39,6 +39,31 @@ create table public.learner_profiles (
   constraint learner_profiles_mix_total check (text_mix + video_mix + audio_mix = 100)
 );
 
+create table public.user_xp (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  total_xp int not null default 0 check (total_xp >= 0),
+  current_level int not null default 1 check (current_level >= 1),
+  current_tier text not null default 'sprout'
+    check (current_tier in ('sprout', 'builder', 'scholar', 'master')),
+  completed_tracks int not null default 0 check (completed_tracks >= 0),
+  total_focus_seconds int not null default 0 check (total_focus_seconds >= 0),
+  updated_at timestamptz not null default now()
+);
+
+create table public.xp_tiers (
+  tier text primary key,
+  min_xp int not null unique check (min_xp >= 0),
+  display_name text not null,
+  position int not null unique
+);
+
+insert into public.xp_tiers (tier, min_xp, display_name, position)
+values
+  ('sprout', 0, 'Sprout', 1),
+  ('builder', 500, 'Builder', 2),
+  ('scholar', 1500, 'Scholar', 3),
+  ('master', 3500, 'Master', 4);
+
 create table public.learning_tracks (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -108,6 +133,9 @@ create table public.learning_sessions (
   detail_level text not null default 'standard'
     check (detail_level in ('quick', 'standard', 'deep')),
   planned_duration_minutes int,
+  actual_duration_seconds int check (actual_duration_seconds >= 0),
+  xp_awarded int not null default 0 check (xp_awarded >= 0),
+  xp_awarded_at timestamptz,
   status text not null default 'active'
     check (status in ('active', 'completed', 'abandoned')),
   started_at timestamptz not null default now(),
@@ -164,6 +192,17 @@ create table public.progress_events (
   created_at timestamptz not null default now()
 );
 
+create table public.xp_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  session_id uuid references public.learning_sessions(id) on delete set null,
+  amount int not null check (amount > 0),
+  reason text not null
+    check (reason in ('session_completed', 'focus_time', 'quiz_completed', 'streak_bonus', 'manual_adjustment')),
+  metadata jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
 -- Optional future RAG table if you move embeddings from Pinecone to Supabase:
 -- create extension if not exists vector;
 -- create table public.document_chunks (
@@ -191,6 +230,8 @@ create index idx_chat_sessions_learning_session_id on public.chat_sessions(learn
 create index idx_chat_sessions_user_id on public.chat_sessions(user_id);
 create index idx_chat_messages_chat_session_id_created_at on public.chat_messages(chat_session_id, created_at);
 create index idx_progress_events_user_id_created_at on public.progress_events(user_id, created_at);
+create index idx_xp_events_user_id_created_at on public.xp_events(user_id, created_at);
+create index idx_xp_events_session_id on public.xp_events(session_id);
 
 create trigger profiles_set_updated_at
 before update on public.profiles
@@ -198,6 +239,10 @@ for each row execute function public.set_updated_at();
 
 create trigger learner_profiles_set_updated_at
 before update on public.learner_profiles
+for each row execute function public.set_updated_at();
+
+create trigger user_xp_set_updated_at
+before update on public.user_xp
 for each row execute function public.set_updated_at();
 
 create trigger learning_tracks_set_updated_at
@@ -247,6 +292,10 @@ begin
   values (new.id)
   on conflict (user_id) do nothing;
 
+  insert into public.user_xp (user_id)
+  values (new.id)
+  on conflict (user_id) do nothing;
+
   return new;
 end;
 $$;
@@ -257,6 +306,7 @@ for each row execute function public.handle_new_user();
 
 alter table public.profiles enable row level security;
 alter table public.learner_profiles enable row level security;
+alter table public.user_xp enable row level security;
 alter table public.learning_tracks enable row level security;
 alter table public.learning_modules enable row level security;
 alter table public.learning_concepts enable row level security;
@@ -267,6 +317,8 @@ alter table public.generated_notes enable row level security;
 alter table public.chat_sessions enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.progress_events enable row level security;
+alter table public.xp_tiers enable row level security;
+alter table public.xp_events enable row level security;
 
 create policy "Users can read own profile"
 on public.profiles for select
@@ -285,6 +337,10 @@ create policy "Users can manage own learner profile"
 on public.learner_profiles for all
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
+
+create policy "Users can read own xp summary"
+on public.user_xp for select
+using (auth.uid() = user_id);
 
 create policy "Users can manage own tracks"
 on public.learning_tracks for all
@@ -399,3 +455,11 @@ create policy "Users can manage own progress events"
 on public.progress_events for all
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
+
+create policy "Users can read xp tiers"
+on public.xp_tiers for select
+using (true);
+
+create policy "Users can read own xp events"
+on public.xp_events for select
+using (auth.uid() = user_id);

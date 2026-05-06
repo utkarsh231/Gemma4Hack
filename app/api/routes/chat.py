@@ -5,6 +5,7 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
+from app.core.auth import AuthenticatedUser, get_optional_current_user
 from app.core.config import Settings, get_settings
 from app.schemas.chat import (
     ChatMessageRequest,
@@ -16,7 +17,11 @@ from app.schemas.chat import (
     DiagnosticQuizSubmitRequest,
     FocusedNotesResponse,
     LinkSessionRequest,
+    SessionCompleteRequest,
+    SessionCompleteResponse,
     SourceSectionsResponse,
+    XpBreakdownResponse,
+    XpSummaryResponse,
     YouTubeSessionRequest,
 )
 from app.schemas.notes import DetailLevel
@@ -32,6 +37,7 @@ from app.services.rag import (
     merge_retrieved_chunks,
     retrieve_keyword_chunks,
 )
+from app.services.supabase_xp import SupabaseXpError, SupabaseXpStore
 from app.services.youtube_text import YouTubeExtractionError, extract_youtube_transcript
 
 logger = logging.getLogger(__name__)
@@ -311,6 +317,74 @@ async def create_focused_notes_from_quiz(
     )
 
 
+@router.post("/sessions/{session_id}/complete", response_model=SessionCompleteResponse)
+async def complete_chat_session(
+    session_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[AuthenticatedUser | None, Depends(get_optional_current_user)],
+    payload: SessionCompleteRequest | None = None,
+) -> SessionCompleteResponse:
+    completed = chat_store.complete_session(
+        session_id=session_id,
+        actual_duration_seconds=payload.actual_duration_seconds if payload else None,
+    )
+    if completed is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+
+    session, xp_summary = completed
+    xp_earned = session.xp_awarded
+
+    if current_user is not None and settings.supabase_url:
+        if not settings.supabase_service_role_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="SUPABASE_SERVICE_ROLE_KEY is required to persist XP.",
+            )
+        try:
+            persisted = await SupabaseXpStore(settings=settings).complete_session(
+                user_id=current_user.id,
+                session_id=session.id,
+                source_title=session.source_stats.filename,
+                actual_duration_seconds=session.actual_duration_seconds or 0,
+                xp_awarded=session.xp_awarded,
+                xp_breakdown=session.xp_breakdown,
+            )
+        except SupabaseXpError as exc:
+            logger.exception("supabase_xp_persistence_failed")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        xp_earned = persisted.xp_awarded
+        xp_summary = persisted.xp_summary
+
+    return SessionCompleteResponse(
+        session_id=session.id,
+        xp_earned=xp_earned,
+        xp_breakdown=_xp_breakdown_response(session),
+        xp_summary=_xp_summary_response(xp_summary),
+        chat_session=_session_response(session),
+    )
+
+
+@router.get("/xp", response_model=XpSummaryResponse)
+async def get_xp_summary(
+    settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[AuthenticatedUser | None, Depends(get_optional_current_user)],
+) -> XpSummaryResponse:
+    if current_user is not None and settings.supabase_url:
+        if not settings.supabase_service_role_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="SUPABASE_SERVICE_ROLE_KEY is required to read persisted XP.",
+            )
+        try:
+            xp_summary = await SupabaseXpStore(settings=settings).get_xp_summary(user_id=current_user.id)
+        except SupabaseXpError as exc:
+            logger.exception("supabase_xp_summary_fetch_failed")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        return _xp_summary_response(xp_summary)
+
+    return _xp_summary_response(chat_store.get_xp_summary())
+
+
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
 async def get_chat_session(session_id: str) -> ChatSessionResponse:
     session = chat_store.get_session(session_id)
@@ -347,7 +421,36 @@ def _session_response(session: ChatSession) -> ChatSessionResponse:
     return ChatSessionResponse(
         session_id=session.id,
         source_stats=session.source_stats,
+        status=session.status,
+        started_at=session.started_at,
+        ended_at=session.ended_at,
+        actual_duration_seconds=session.actual_duration_seconds,
+        xp_awarded=session.xp_awarded,
+        xp_awarded_at=session.xp_awarded_at,
         messages=session.messages,
+    )
+
+
+def _xp_summary_response(xp_summary) -> XpSummaryResponse:
+    return XpSummaryResponse(
+        total_xp=xp_summary.total_xp,
+        current_level=xp_summary.current_level,
+        current_tier=xp_summary.current_tier,
+        current_tier_display_name=xp_summary.current_tier_display_name,
+        next_level_xp=xp_summary.next_level_xp,
+        completed_tracks=xp_summary.completed_tracks,
+        total_focus_seconds=xp_summary.total_focus_seconds,
+    )
+
+
+def _xp_breakdown_response(session: ChatSession) -> XpBreakdownResponse | None:
+    if session.xp_breakdown is None:
+        return None
+    return XpBreakdownResponse(
+        session_completion_xp=session.xp_breakdown.session_completion_xp,
+        focus_time_xp=session.xp_breakdown.focus_time_xp,
+        quiz_completion_xp=session.xp_breakdown.quiz_completion_xp,
+        milestone_bonus_xp=session.xp_breakdown.milestone_bonus_xp,
     )
 
 

@@ -22,6 +22,12 @@ class ChatMessage(BaseModel):
 class ChatSessionResponse(BaseModel):
     session_id: str
     source_stats: SourceStats
+    status: str = "active"
+    started_at: datetime
+    ended_at: datetime | None = None
+    actual_duration_seconds: int | None = Field(default=None, ge=0)
+    xp_awarded: int = Field(default=0, ge=0)
+    xp_awarded_at: datetime | None = None
     messages: list[ChatMessage] = Field(min_length=1)
 
 
@@ -92,6 +98,35 @@ class FocusedNotesResponse(BaseModel):
     session_id: str
     notes_markdown: str = Field(min_length=1)
     recommended_videos: list[RecommendedVideo] = Field(default_factory=list, max_length=8)
+    chat_session: ChatSessionResponse
+
+
+class SessionCompleteRequest(BaseModel):
+    actual_duration_seconds: int | None = Field(default=None, ge=0)
+
+
+class XpBreakdownResponse(BaseModel):
+    session_completion_xp: int = Field(ge=0)
+    focus_time_xp: int = Field(ge=0)
+    quiz_completion_xp: int = Field(ge=0)
+    milestone_bonus_xp: int = Field(ge=0)
+
+
+class XpSummaryResponse(BaseModel):
+    total_xp: int = Field(ge=0)
+    current_level: int = Field(ge=1)
+    current_tier: str
+    current_tier_display_name: str
+    next_level_xp: int = Field(ge=0)
+    completed_tracks: int = Field(ge=0)
+    total_focus_seconds: int = Field(ge=0)
+
+
+class SessionCompleteResponse(BaseModel):
+    session_id: str
+    xp_earned: int = Field(ge=0)
+    xp_breakdown: XpBreakdownResponse | None = None
+    xp_summary: XpSummaryResponse
     chat_session: ChatSessionResponse
 
 
