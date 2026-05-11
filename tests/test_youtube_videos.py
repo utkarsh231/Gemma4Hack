@@ -54,6 +54,20 @@ def test_build_video_search_queries_prefers_source_specific_query_topics() -> No
     ]
 
 
+def test_build_video_search_queries_ignores_numbered_fallback_headings() -> None:
+    queries = build_video_search_queries(
+        source=source(),
+        notes_markdown="# Personalized Focus Map\n\n### Focus Block 1\n\n### Focus Block 2\n\n## Gradient Descent",
+        learner_goal=None,
+        query_topics=None,
+        max_queries=3,
+    )
+
+    assert "1 beginner explanation tutorial" not in queries
+    assert "2 beginner explanation tutorial" not in queries
+    assert queries[0] == "Gradient Descent beginner explanation tutorial"
+
+
 def test_parse_youtube_search_item_returns_embed_ready_video() -> None:
     video = parse_youtube_search_item(
         item={

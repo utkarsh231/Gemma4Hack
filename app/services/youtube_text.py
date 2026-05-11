@@ -70,8 +70,10 @@ def extract_youtube_video_id(url: str) -> str:
         video_id = parse_qs(parsed.query).get("v", [""])[0]
     elif host in {"youtube.com", "www.youtube.com", "m.youtube.com"} and parsed.path.startswith("/shorts/"):
         video_id = parsed.path.removeprefix("/shorts/").split("/")[0]
-    elif host in {"youtube.com", "www.youtube.com", "m.youtube.com"} and parsed.path.startswith("/embed/"):
+    elif host in {"youtube.com", "www.youtube.com", "m.youtube.com", "www.youtube-nocookie.com"} and parsed.path.startswith("/embed/"):
         video_id = parsed.path.removeprefix("/embed/").split("/")[0]
+    elif host in {"youtube.com", "www.youtube.com", "m.youtube.com"} and parsed.path.startswith("/live/"):
+        video_id = parsed.path.removeprefix("/live/").split("/")[0]
     else:
         video_id = ""
 

@@ -30,10 +30,12 @@ STOPWORDS = {
     "introduction",
     "key",
     "learner",
+    "map",
     "material",
     "memory",
     "notes",
     "overview",
+    "personalized",
     "points",
     "quick",
     "self",
@@ -297,6 +299,8 @@ def clean_query_topic(topic: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9 +#.-]+", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-")
     words = [word for word in cleaned.split() if word.lower() not in STOPWORDS]
+    if not any(re.search(r"[A-Za-z]", word) for word in words):
+        return ""
     return " ".join(words[:8])
 
 
@@ -311,7 +315,7 @@ def is_useful_topic(topic: str) -> bool:
     if len(cleaned) < 4 or len(cleaned) > 140:
         return False
     words = [word for word in re.findall(r"[A-Za-z0-9+#.-]+", cleaned) if word.lower() not in STOPWORDS]
-    return bool(words)
+    return any(re.search(r"[A-Za-z]", word) for word in words)
 
 
 def clean_youtube_text(value) -> str:

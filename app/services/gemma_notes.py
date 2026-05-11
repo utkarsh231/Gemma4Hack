@@ -368,8 +368,8 @@ class GemmaNotesService:
                     max_source_chars=10_000,
                 ),
             )
-        except Exception:
-            logger.warning("youtube_video_query_topics_failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("youtube_video_query_topics_failed: %s", exc)
             return []
 
         text = getattr(response, "text", None)

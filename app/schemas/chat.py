@@ -166,6 +166,7 @@ class YouTubeSessionRequest(BaseModel):
             "m.youtube.com",
             "youtu.be",
             "www.youtu.be",
+            "www.youtube-nocookie.com",
         )
         if not stripped.startswith(("https://", "http://")):
             raise ValueError("YouTube URL must start with http:// or https://.")
@@ -178,8 +179,11 @@ class YouTubeSessionRequest(BaseModel):
             raise ValueError("YouTube short URL is missing a video id.")
         if "youtube.com" in host and parsed.path == "/watch" and not parse_qs(parsed.query).get("v"):
             raise ValueError("YouTube watch URL is missing a video id.")
-        if "youtube.com" in host and not (
-            parsed.path == "/watch" or parsed.path.startswith("/shorts/") or parsed.path.startswith("/embed/")
+        if ("youtube.com" in host or "youtube-nocookie.com" in host) and not (
+            parsed.path == "/watch"
+            or parsed.path.startswith("/shorts/")
+            or parsed.path.startswith("/embed/")
+            or parsed.path.startswith("/live/")
         ):
             raise ValueError("Only YouTube video URLs are supported.")
         return stripped

@@ -394,7 +394,11 @@ async def get_chat_session(session_id: str) -> ChatSessionResponse:
 
 
 async def _extract_uploaded_pdf(*, file: UploadFile, settings: Settings):
-    if file.content_type not in {"application/pdf", "application/x-pdf"}:
+    content_type = (file.content_type or "").lower().split(";", 1)[0].strip()
+    filename = file.filename or "uploaded.pdf"
+    is_pdf_content_type = content_type in {"application/pdf", "application/x-pdf"}
+    is_generic_content_type = content_type in {"application/octet-stream", ""}
+    if not is_pdf_content_type and not (is_generic_content_type and filename.lower().endswith(".pdf")):
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Only PDF uploads are supported.")
 
     raw_pdf = await file.read()
@@ -409,7 +413,7 @@ async def _extract_uploaded_pdf(*, file: UploadFile, settings: Settings):
     try:
         return extract_pdf_text(
             raw_pdf,
-            filename=file.filename or "uploaded.pdf",
+            filename=filename,
             max_pages=settings.max_pdf_pages,
             max_chars=settings.max_extracted_chars,
         )

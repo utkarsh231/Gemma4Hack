@@ -109,6 +109,31 @@ def test_create_chat_session_and_ask_question() -> None:
     assert "Attention improves with small study blocks." in message["content_markdown"]
 
 
+def test_create_chat_session_accepts_generic_pdf_content_type() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/v1/chat/sessions/from-pdf",
+        files={"file": ("lesson.pdf", b"%PDF-1.4 fake test bytes", "application/octet-stream")},
+        data={"learner_goal": "Study", "detail_level": "standard"},
+    )
+
+    assert create_response.status_code == 201
+    assert create_response.json()["source_stats"]["filename"] == "lesson.pdf"
+
+
+def test_create_chat_session_rejects_generic_non_pdf_upload() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/v1/chat/sessions/from-pdf",
+        files={"file": ("lesson.txt", b"not a pdf", "application/octet-stream")},
+        data={"learner_goal": "Study", "detail_level": "standard"},
+    )
+
+    assert create_response.status_code == 415
+
+
 def test_complete_chat_session_awards_xp_from_time_and_updates_summary() -> None:
     client = TestClient(app)
 
@@ -190,6 +215,22 @@ def test_create_chat_session_from_youtube() -> None:
     assert created["session_id"]
     assert created["source_stats"]["filename"] == "https://www.youtube.com/watch?v=abc123"
     assert "Preparing your adaptive notes" in created["messages"][0]["content_markdown"]
+
+
+def test_create_chat_session_from_youtube_live_url() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/v1/chat/sessions/from-youtube",
+        json={
+            "url": "https://www.youtube.com/live/abc123?si=share",
+            "learner_goal": "Study",
+            "detail_level": "standard",
+        },
+    )
+
+    assert create_response.status_code == 201
+    assert create_response.json()["source_stats"]["filename"] == "https://www.youtube.com/live/abc123?si=share"
 
 
 def test_create_chat_session_from_link() -> None:
